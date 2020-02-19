@@ -1,0 +1,251 @@
+;;; -*- lexical-binding: t; -*-
+
+(eval-when-compile (require 'cl-lib))
+(require 'seq)
+
+(require 'rstream-core)
+(require 'rstream-util)
+
+(defclass rstream-operator (rstream--forwarder)
+  ((input
+    :initarg :input
+    :accessor rstream-operator--input))
+  :documentation "\
+An Operator allow you make some transformation on data from Producer.
+
+Notice that Operator is unicast, it's usual to wrap it with
+`rstream-broadcaster' to make it more useful."
+  :abstract t)
+
+(cl-defmethod rstream-producer-start ((obj rstream-operator) listener)
+  (rstream-register-listener (rstream-operator--input obj) obj)
+  (setf (rstream--forwarder-output obj) listener))
+
+(cl-defmethod rstream-producer-stop ((obj rstream-operator))
+  (rstream-delete-listener (rstream-operator--input obj) obj)
+  (setf (rstream--forwarder-output obj) nil))
+
+(defsubst rstream-apply-operator (obj operator-class &rest args)
+  (rstream-broadcaster
+   :producer (apply #'make-instance operator-class :input obj args)))
+
+;; Map
+
+(defun rstream-map (stream func)
+  ""
+  (rstream-apply-operator stream 'rstream-map--result
+                          :func func))
+
+(defclass rstream-map--result (rstream-operator)
+  ((func :initarg :func)))
+
+(cl-defmethod rstream-on-value ((obj rstream-map--result) value)
+  (with-slots (func) obj
+    (let ((result (funcall func value)))
+      (cl-call-next-method obj result))))
+
+;; MapTo
+
+(defun rstream-map-to (stream value)
+  (rstream-map stream (lambda (_) value)))
+
+;; Inspect
+
+(defun rstream-inspect (stream func)
+  (rstream-map stream (lambda (v) (funcall func v) v)))
+
+;; Filter
+
+(defun rstream-filter (stream func)
+  (rstream-apply-operator stream 'rstream-filter--result
+                          :func func))
+
+(defclass rstream-filter--result (rstream-operator)
+  ((func :initarg :func)))
+
+(cl-defmethod rstream-on-value ((obj rstream-filter--result) value)
+  (with-slots (func) obj
+    (let ((result (funcall func value)))
+      (when result
+        (cl-call-next-method)))))
+
+;; Remove
+
+(defun rstream-remove (stream func)
+  (rstream-filter stream (lambda (x) (not (funcall func x)))))
+
+;; Scan
+
+(defun rstream-scan-from (stream func initial)
+  (rstream-apply-operator stream 'rstream-scan--result
+                          :seed initial :func func))
+
+(defun rstream-scan (stream func)
+  (rstream-apply-operator stream 'rstream-scan--result
+                          :func func))
+
+(defclass rstream-scan--result (rstream-operator)
+  ((seed :initarg :seed) (func :initarg :func) (acc)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-scan--result) _listener)
+  (let ((val (if (slot-boundp obj 'seed)
+                 (oref obj seed)
+               (rstream-uninitialized))))
+    (oset obj acc val))
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-scan--result) value)
+  (with-slots (acc func) obj
+    (if (rstream-initialized-p acc)
+        (setf acc (funcall func acc value))
+      (setf acc value))
+    (cl-call-next-method obj acc)))
+
+;; Distinct
+
+(cl-defun rstream-distinct (stream &optional (testfn #'equal))
+  (rstream-apply-operator stream 'rstream-distinct--result
+                          :comparator testfn))
+
+(defclass rstream-distinct--result (rstream-operator)
+  ((comparator :initarg :comparator) (cache)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-distinct--result) _listener)
+  (let ((comp (oref obj comparator)))
+    (oset obj cache (if (memq comp '(equal eq eql))
+                        (make-hash-table :test comp)
+                      nil)))
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-distinct--result) value)
+  (with-slots (cache comparator) obj
+    (let ((use-ht (hash-table-p cache)))
+      (cl-labels ((find (val)
+                    (if use-ht
+                        (gethash val cache)
+                      (seq-contains-p cache val comparator)))
+                  (remember (val)
+                    (if use-ht
+                        (puthash val t cache)
+                      (push val cache))))
+        (when (not (find value))
+          (remember value)
+          (cl-call-next-method))))))
+
+;; IgnoreUnchange
+
+(cl-defun rstream-ignore-unchange (stream &optional (testfn #'equal))
+  (rstream-apply-operator stream 'rstream-ignore-unchange--result
+                          :comparator testfn))
+
+(defclass rstream-ignore-unchange--result (rstream-operator)
+  ((comparator :initarg :comparator)
+   (cache)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-ignore-unchange--result)
+                                      _listener)
+  (slot-makeunbound obj 'cache)
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-ignore-unchange--result) value)
+  (with-slots (cache comparator) obj
+    (if (rstream-initialized-p cache)
+        (when (not (funcall comparator cache value))
+          (oset obj cache value)
+          (cl-call-next-method))
+      (oset obj cache value)
+      (cl-call-next-method))))
+
+;; Take
+
+(defun rstream-take (stream count)
+  (rstream-broadcaster
+   :producer (rstream-take--result :input stream
+                                   :count count)))
+
+(defclass rstream-take--result (rstream-operator)
+  ((count :initarg :count)
+   (counter)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-take--result) _listener)
+  (oset obj counter 0)
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-take--result) _value)
+  (cl-call-next-method)
+  (with-slots (count counter) obj
+    (cl-incf counter)
+    (when (= counter count)
+      (rstream-on-complete obj))))
+
+;; Drop
+
+(defun rstream-drop (stream count)
+  (rstream-broadcaster
+   :producer (rstream-drop--result :input stream :count count)))
+
+(defclass rstream-drop--result (rstream-operator)
+  ((count :initarg :count) (counter)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-drop--result) _listener)
+  (oset obj counter 0)
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-drop--result) _value)
+  (with-slots (count counter) obj
+    (if (= counter (1+ count))
+        (cl-call-next-method)
+      (cl-incf counter))))
+
+;; Switch
+
+(defun rstream-switch (stream)
+  (rstream-broadcaster
+   :producer (rstream-switch--result :input stream)))
+
+(defclass rstream-switch--result (rstream-operator)
+  ((current-sub) (complete-p)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-switch--result) _listener)
+  (oset obj current-sub nil)
+  (oset obj complete-p nil)
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-switch--result) value)
+  (with-slots (complete-p current-sub) obj
+    (when current-sub (rstream-unsubscribe current-sub))
+    (let ((sub (rstream-subscribe value
+                                  #'cl-call-next-method
+                                  (lambda (err)
+                                    (rstream-on-error obj err))
+                                  (lambda ()
+                                    (setf current-sub nil)
+                                    (when complete-p
+                                      (rstream-on-complete obj))))))
+      (setf current-sub sub))))
+
+(cl-defmethod rstream-on-complete ((obj rstream-switch--result))
+  (with-slots (current-sub complete-p) obj
+    (if current-sub
+        (setf complete-p t)
+      (cl-call-next-method))))
+
+;; Debounce
+
+(defun rstream-debounce (stream delay)
+  (rstream-apply-operator stream 'rstream-debounce--result
+                           :delay delay))
+
+(defclass rstream-debounce--result (rstream-operator)
+  ((delay :initarg :delay) (timer :initform nil)))
+
+(cl-defmethod rstream-on-value ((obj rstream-debounce--result) _value)
+  (with-slots (timer delay) obj
+    (when timer (cancel-timer timer))
+    (setf timer (run-at-time (rstream--ms-to-sec delay) nil
+                             #'cl-call-next-method))))
+
+;; Throttle
+
+(provide 'rstream-operator)
+;;; rstream-operator.el ends here
