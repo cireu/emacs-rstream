@@ -265,5 +265,34 @@ Notice that Operator is unicast, it's usual to wrap it with
 
 ;; Throttle
 
+(defun rstream-throttle (stream thresold)
+  (rstream-apply-operator stream 'rstream-throttle--result
+                          :thresold thresold))
+
+(defclass rstream-throttle--result (rstream-operator)
+  ((thresold :initarg :thresold) (timer)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-throttle--result) _)
+  (oset obj timer nil)
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-throttle--result) _value)
+  (with-slots (timer thresold latest-value) obj
+    (when (null timer)
+      (setf timer (run-at-time (rstream--ms-to-sec thresold) nil
+                               (lambda ()
+                                 (setf timer nil)
+                                 (cl-call-next-method)))))))
+
+(cl-defmethod rstream-on-error ((obj rstream-throttle--result) _error)
+  (let ((timer (oref obj timer)))
+    (when timer (cancel-timer timer)))
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-complete ((obj rstream-throttle--result))
+  (with-slots (timer) obj
+    (when timer (cancel-timer timer)))
+  (cl-call-next-method))
+
 (provide 'rstream-operator)
 ;;; rstream-operator.el ends here
