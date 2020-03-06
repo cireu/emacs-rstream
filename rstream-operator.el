@@ -237,13 +237,31 @@ Notice that Operator is unicast, it's usual to wrap it with
                            :delay delay))
 
 (defclass rstream-debounce--result (rstream-operator)
-  ((delay :initarg :delay) (timer :initform nil)))
+  ((delay :initarg :delay) (timer :initform nil) (latest-value)))
 
-(cl-defmethod rstream-on-value ((obj rstream-debounce--result) _value)
-  (with-slots (timer delay) obj
+(cl-defmethod rstream-producer-start ((obj rstream-debounce--result) _lis)
+  (oset obj latest-value (rstream-uninitialized))
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-value ((obj rstream-debounce--result) value)
+  (with-slots (timer delay latest-value) obj
+    (setf latest-value value)
     (when timer (cancel-timer timer))
     (setf timer (run-at-time (rstream--ms-to-sec delay) nil
-                             #'cl-call-next-method))))
+                             (lambda ()
+                               (cl-call-next-method obj latest-value))))))
+
+(cl-defmethod rstream-on-error ((obj rstream-debounce--result) _error)
+  (let ((timer (oref obj timer)))
+    (when timer (cancel-timer timer)))
+  (cl-call-next-method))
+
+(cl-defmethod rstream-on-complete ((obj rstream-debounce--result))
+  (with-slots (timer latest-value) obj
+    (when timer (cancel-timer timer))
+    (when (rstream-initialized-p latest-value)
+      (rstream-on-value obj latest-value)))
+  (cl-call-next-method))
 
 ;; Throttle
 
