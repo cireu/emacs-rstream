@@ -1,4 +1,29 @@
-;;; -*- lexical-binding: t; -*-
+;;; rstream-core.el --- Core implementation -*- lexical-binding: t -*-
+
+;; Copyright (C) 2020 Zhu Zihao
+
+;; Author: Zhu Zihao <all_but_last@163.com>
+
+;; This file is NOT part of GNU Emacs.
+
+;; This file is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 3, or (at your option)
+;; any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; For a full copy of the GNU General Public License
+;; see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;;
+
+;;; Code:
 
 (require 'eieio)
 
@@ -214,4 +239,9 @@ for internal usage only.")
   (rstream-on-complete (rstream--forwarder-output obj)))
 
 (provide 'rstream-core)
+
+;; Local Variables:
+;; coding: utf-8
+;; End:
+
 ;;; rstream-core.el ends here

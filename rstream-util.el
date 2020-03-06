@@ -1,12 +1,8 @@
-;;; rstream-util.el --- Container of value maybe empty -*- lexical-binding: t -*-
+;;; rstream-util.el --- Utilities -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2020 Zhu Zihao
 
 ;; Author: Zhu Zihao <all_but_last@163.com>
-;; URL:
-;; Version: 0.0.1
-;; Package-Requires: ((emacs "24.3"))
-;; Keywords: lisp
 
 ;; This file is NOT part of GNU Emacs.
 

@@ -1,4 +1,29 @@
-;;; -*- lexical-binding: t; -*-
+;;; rstream-operator.el --- Stream Operators -*- lexical-binding: t -*-
+
+;; Copyright (C) 2020 Zhu Zihao
+
+;; Author: Zhu Zihao <all_but_last@163.com>
+
+;; This file is NOT part of GNU Emacs.
+
+;; This file is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 3, or (at your option)
+;; any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; For a full copy of the GNU General Public License
+;; see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;;
+
+;;; Code:
 
 (eval-when-compile (require 'cl-lib))
 (require 'seq)
@@ -281,8 +306,8 @@ Notice that Operator is unicast, it's usual to wrap it with
     (when (null timer)
       (setf timer (run-at-time (rstream--ms-to-sec thresold) nil
                                (lambda ()
-                                 (setf timer nil)
-                                 (cl-call-next-method)))))))
+                                 (setf timer nil))))
+      (cl-call-next-method))))
 
 (cl-defmethod rstream-on-error ((obj rstream-throttle--result) _error)
   (let ((timer (oref obj timer)))
@@ -295,4 +320,9 @@ Notice that Operator is unicast, it's usual to wrap it with
   (cl-call-next-method))
 
 (provide 'rstream-operator)
+
+;; Local Variables:
+;; coding: utf-8
+;; End:
+
 ;;; rstream-operator.el ends here
