@@ -25,7 +25,9 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'cl-lib))
 (require 'eieio)
+(require 'eieio-base)
 
 (defsubst rstream--run-asap (func &rest args)
   "Run FUNC with ARGS asynchronously, as soon as possible."
@@ -86,26 +88,46 @@
 
 ;;; Core
 
-(defclass rstream-broadcaster ()
-  ((status
-    :initform 'pending
-    :reader rstream-broadcaster-status
-    :writer rstream-broadcaster-advance-status
-    :documentation "\
-Represent the active status of producer, should be one of following symbol.
+(defclass rstream-broadcaster-state--pending (eieio-singleton) ())
 
-- pending :: The producer is idled and there's no listeners.
-- running :: The producer is forwarding value to listeners.
-- closing :: The stop task of producer was put into async queue.
-- done :: The producer has sent all values to listeners.
-- error ::  The producer occured an error during the process of production.")
+(defclass rstream-broadcaster-state--running ()
+  ((listeners :initarg :listeners)))
+
+(defclass rstream-broadcaster-state--complete (eieio-singleton) ())
+
+(defclass rstream-broadcaster-state--error ()
+  ((error-type :initarg :error-type)
+   (error-data :initarg :error-data)))
+
+(defclass rstream-broadcaster-state--closing ()
+  ((close-task :initarg :close-task)))
+
+(defclass rstream-broadcaster ()
+  ((state
+    :initform (rstream-broadcaster-state--pending)
+    :documentation "\
+This slot can be one of following type.
+
+- `rstream-broadcaster-state--pending' ::
+  Broadcaster is idle for any action.
+
+- `rstream-broadcaster-state--running' ::
+  Several listeners are listening to the broadcaster and receiving value
+  from producer.
+
+- `rstream-broadcaster-state--closing' ::
+  Broadcaster is running a async close task, task can be canceled if new
+  listener come in.
+
+- `rstream-broadcaster-state--complete' ::
+  The producer was completed and cannot advance to any other state or accept
+  new listeners.
+
+- `rstream-broadcaster-state--error' ::
+  The producer was exited shamefully and cannot advance to any other state
+  or accept new listeners.")
    (producer
-    :initarg :producer)
-   (listeners
-    :initform nil)
-   (stop-task-runner
-    :initform nil
-    :documentation ""))
+    :initarg :producer))
   :documentation "\
 A Broadcaster adapts a Producer and makes it \"observable\" from different
 Listener. You can subscribe a Broadcaster with callback and it will run your
@@ -116,55 +138,67 @@ subscription happened, and it will automatically stop the Producer when last
 subscription gone.")
 
 (cl-defmethod rstream-register-listener ((obj rstream-broadcaster) listener)
-  (with-slots (listeners producer stop-task-runner) obj
-    (let ((status (rstream-broadcaster-status obj)))
-      (when (not (memq status '(done error)))
-        (setf listeners (nconc listeners (list listener)))
-        (when (eq status 'pending)
-          (rstream-producer-start producer obj))
-        (when (eq status 'closing)
-          (cancel-timer stop-task-runner)
-          (setf stop-task-runner nil))
-        (rstream-broadcaster-advance-status obj 'running)))))
+  (let ((state (oref obj state))
+        (prod (oref obj producer))
+        (lis-list (list listener)))
+    (cl-typecase state
+      (rstream-broadcaster-state--running
+       (oset obj state (rstream-broadcaster-state--running
+                        :listeners (append (oref state listeners) lis-list))))
+      (rstream-broadcaster-state--pending
+       (oset obj state (rstream-broadcaster-state--running
+                        :listeners lis-list))
+       (rstream-producer-start prod obj))
+      (rstream-broadcaster-state--closing
+       (cancel-timer (oref state close-task))
+       (oset obj state (rstream-broadcaster-state--running
+                        :listeners lis-list)))
+      (otherwise
+       (error "Broadcaster was terminated: %S" obj)))))
 
 (cl-defmethod rstream-delete-listener ((obj rstream-broadcaster) listener)
-  (with-slots (listeners producer stop-task-runner) obj
-    (let* ((status (rstream-broadcaster-status obj))
-           (should-reset-p
-             (and (eq status 'running)
-                  (null (setf listeners (delq listener listeners))))))
-      (when should-reset-p
-        (rstream-broadcaster-advance-status obj 'closing)
-        (setf stop-task-runner
-              (rstream--run-asap #'rstream-broadcaster--teardown
-                                 obj 'pending))))))
+  (let ((state (oref obj state)))
+    (cl-typecase state
+      (rstream-broadcaster-state--running
+       (let* ((rest (remq listener (oref state listeners)))
+              (close-task (lambda ()
+                            (oset obj state
+                                  (rstream-broadcaster-state--pending))))
+              (new-state (if rest
+                             (rstream-broadcaster-state--running
+                              :listeners rest)
+                           (rstream-broadcaster-state--closing
+                            :close-task (rstream--run-asap close-task)))))
+         (oset obj state new-state)))
+      (otherwise
+       (error "Not in running state: %S" obj)))))
 
 (cl-defmethod rstream-on-value ((obj rstream-broadcaster) value)
-  (dolist (lis (oref obj listeners))
-    (rstream-on-value lis value)))
+  (let ((state (oref obj state)))
+    (cl-check-type state rstream-broadcaster-state--running)
+    (dolist (lis (oref state listeners))
+      (rstream-on-value lis value))))
 
 (cl-defmethod rstream-on-error ((obj rstream-broadcaster) error)
-  (with-slots (listeners) obj
-    (let ((listeners-backup listeners))
-      (rstream-broadcaster--teardown obj 'error)
+  (let ((state (oref obj state)))
+    (cl-check-type state rstream-broadcaster-state--running)
+    (let ((listeners-backup (oref state listeners))
+          (error-type (car error))
+          (error-data (cdr error)))
+      (oset obj state (rstream-broadcaster-state--error
+                       :error-type error-type :error-data error-data))
       (if (null listeners-backup)
-          (signal (car error) (cdr error))
+          (signal error-type error-data)
         (dolist (lis listeners-backup)
           (rstream-on-error lis error))))))
 
 (cl-defmethod rstream-on-complete ((obj rstream-broadcaster))
-  (with-slots (listeners) obj
-    (let ((listeners-backup listeners))
-      (rstream-broadcaster--teardown obj 'done)
+  (let ((state (oref obj state)))
+    (cl-check-type state rstream-broadcaster-state--running)
+    (let ((listeners-backup (oref state listeners)))
+      (oset obj state (rstream-broadcaster-state--complete))
       (dolist (lis listeners-backup)
         (rstream-on-complete lis)))))
-
-(defun rstream-broadcaster--teardown (broadcaster status)
-  "Stop producer and clean all listeners of BROADCASTER, advance to STATUS."
-  (with-slots (producer listeners) broadcaster
-    (rstream-producer-stop producer)
-    (setf listeners nil)
-    (rstream-broadcaster-advance-status broadcaster status)))
 
 (defclass rstream-subscription ()
   ((listener :initarg :listener)
