@@ -56,9 +56,11 @@
 
 ;; Observable API
 
-(cl-defgeneric rstream-register-listener (observable listener))
+(cl-defgeneric rstream-register-listener (observable listener)
+  "Attach LISTENER to OBSERVABLE.")
 
-(cl-defgeneric rstream-delete-listener (observable listener))
+(cl-defgeneric rstream-delete-listener (observable listener)
+  "Remove LISTENER from OBSERVABLE.")
 
 (defclass rstream-functional-producer ()
   ((start :initarg :start)
