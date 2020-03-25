@@ -48,8 +48,8 @@
 (cl-defgeneric rstream-on-value (listener value)
   "Handle arrived VALUE for LISTENER.")
 
-(cl-defgeneric rstream-on-error (listener error)
-  "Handle arrived ERROR for LISTENER.")
+(cl-defgeneric rstream-on-error (listener error-type error-data)
+  "Handle arrived error in ERROR-TYPE with ERROR-DATA for LISTENER.")
 
 (cl-defgeneric rstream-on-complete (listener)
   "Handle a graceful complete for LISTENER.")
@@ -81,8 +81,8 @@
 (cl-defmethod rstream-on-value ((obj rstream-functional-listener) value)
   (funcall (oref obj on-value) value))
 
-(cl-defmethod rstream-on-error ((obj rstream-functional-listener) error)
-  (funcall (oref obj on-error) error))
+(cl-defmethod rstream-on-error ((obj rstream-functional-listener) &rest error)
+  (apply (oref obj on-error) error))
 
 (cl-defmethod rstream-on-complete ((obj rstream-functional-listener))
   (funcall (oref obj on-complete)))
@@ -181,18 +181,17 @@ subscription gone.")
     (dolist (lis (oref state listeners))
       (rstream-on-value lis value))))
 
-(cl-defmethod rstream-on-error ((obj rstream-broadcaster) error)
+(cl-defmethod rstream-on-error ((obj rstream-broadcaster)
+                                error-type error-data)
   (let ((state (oref obj state)))
     (cl-check-type state rstream-broadcaster-state--running)
-    (let ((listeners-backup (oref state listeners))
-          (error-type (car error))
-          (error-data (cdr error)))
+    (let ((listeners-backup (oref state listeners)))
       (oset obj state (rstream-broadcaster-state--error
                        :error-type error-type :error-data error-data))
       (if (null listeners-backup)
           (signal error-type error-data)
         (dolist (lis listeners-backup)
-          (rstream-on-error lis error))))))
+          (rstream-on-error lis error-type error-data))))))
 
 (cl-defmethod rstream-on-complete ((obj rstream-broadcaster))
   (let ((state (oref obj state)))
@@ -241,10 +240,10 @@ Use this only when you know what you are doing.
 \n(fn STREAM VALUE)")
 
 (defalias 'rstream-force-send-error #'rstream-on-error
-  "Force send ERROR to STREAM.
+  "Force send error in ERROR-TYPE with ERROR-DATA to STREAM.
 
 Use this only when you know what you are doing.
-\n(fn STREAM ERROR)")
+\n(fn STREAM ERROR-TYPE ERROR-DATA)")
 
 (defalias 'rstream-force-send-complete #'rstream-on-complete
   "Force send a complete signal to STREAM.
@@ -268,8 +267,8 @@ for internal usage only.")
 (cl-defmethod rstream-on-value ((obj rstream--forwarder) value)
   (rstream-on-value (rstream--forwarder-output obj) value))
 
-(cl-defmethod rstream-on-error ((obj rstream--forwarder) error)
-  (rstream-on-error (rstream--forwarder-output obj) error))
+(cl-defmethod rstream-on-error ((obj rstream--forwarder) &rest error)
+  (apply #'rstream-on-error (rstream--forwarder-output obj) error))
 
 (cl-defmethod rstream-on-complete ((obj rstream--forwarder))
   (rstream-on-complete (rstream--forwarder-output obj)))

@@ -241,8 +241,8 @@ Notice that Operator is unicast, it's usual to wrap it with
     (when current-sub (rstream-unsubscribe current-sub))
     (let ((sub (rstream-subscribe value
                                   #'cl-call-next-method
-                                  (lambda (err)
-                                    (rstream-on-error obj err))
+                                  (lambda (err-type err-data)
+                                    (rstream-on-error obj err-type err-data))
                                   (lambda ()
                                     (setf current-sub nil)
                                     (when complete-p
@@ -276,7 +276,7 @@ Notice that Operator is unicast, it's usual to wrap it with
                              (lambda ()
                                (cl-call-next-method obj latest-value))))))
 
-(cl-defmethod rstream-on-error ((obj rstream-debounce--result) _error)
+(cl-defmethod rstream-on-error ((obj rstream-debounce--result) &rest _error)
   (let ((timer (oref obj timer)))
     (when timer (cancel-timer timer)))
   (cl-call-next-method))
@@ -309,7 +309,7 @@ Notice that Operator is unicast, it's usual to wrap it with
                                  (setf timer nil))))
       (cl-call-next-method))))
 
-(cl-defmethod rstream-on-error ((obj rstream-throttle--result) _error)
+(cl-defmethod rstream-on-error ((obj rstream-throttle--result) &rest _error)
   (let ((timer (oref obj timer)))
     (when timer (cancel-timer timer)))
   (cl-call-next-method))
