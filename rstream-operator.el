@@ -319,6 +319,20 @@ Notice that Operator is unicast, it's usual to wrap it with
     (when timer (cancel-timer timer)))
   (cl-call-next-method))
 
+;; StartWith
+
+(defun rstream-start-with (stream initial-value)
+  (rstream-apply-operator stream 'rstream-start-with--result
+                          :value initial-value))
+
+(defclass rstream-start-with--result (rstream-operator)
+  ((value :initarg :value)))
+
+(cl-defmethod rstream-producer-start ((obj rstream-start-with--result)
+                                      listener)
+  (rstream-send-value listener (oref obj value))
+  (cl-call-next-method))
+
 (provide 'rstream-operator)
 
 ;; Local Variables:
