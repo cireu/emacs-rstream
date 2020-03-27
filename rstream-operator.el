@@ -201,7 +201,7 @@ Notice that Operator is unicast, it's usual to wrap it with
   (with-slots (count counter) obj
     (cl-incf counter)
     (when (= counter count)
-      (rstream-on-complete obj))))
+      (rstream-send-complete obj))))
 
 ;; Drop
 
@@ -242,11 +242,11 @@ Notice that Operator is unicast, it's usual to wrap it with
     (let ((sub (rstream-subscribe value
                                   #'cl-call-next-method
                                   (lambda (err-type err-data)
-                                    (rstream-on-error obj err-type err-data))
+                                    (rstream-send-error obj err-type err-data))
                                   (lambda ()
                                     (setf current-sub nil)
                                     (when complete-p
-                                      (rstream-on-complete obj))))))
+                                      (rstream-send-complete obj))))))
       (setf current-sub sub))))
 
 (cl-defmethod rstream-on-complete ((obj rstream-switch--result))
@@ -285,7 +285,7 @@ Notice that Operator is unicast, it's usual to wrap it with
   (with-slots (timer latest-value) obj
     (when timer (cancel-timer timer))
     (when (rstream-initialized-p latest-value)
-      (rstream-on-value obj latest-value)))
+      (rstream-send-value obj latest-value)))
   (cl-call-next-method))
 
 ;; Throttle

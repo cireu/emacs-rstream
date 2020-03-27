@@ -44,8 +44,8 @@ STOP should accept no param and it is used to stop the proudcer."
   "Create a synchronous stream from SEQ."
   (rstream-create (lambda (listener)
                     (seq-doseq (v seq)
-                      (rstream-on-value listener v))
-                    (rstream-on-complete listener))
+                      (rstream-send-value listener v))
+                    (rstream-send-complete listener))
                   ;; No teardown code for synchronous streams because they will
                   ;; emit all values directly after they were subscribed.
                   #'ignore))
@@ -72,7 +72,7 @@ Values in ELEMS will be emitted sequentially."
     (let ((sec (rstream--ms-to-sec period)))
       (setf timer (run-with-timer sec sec
                                   (lambda ()
-                                    (rstream-on-value listener counter)
+                                    (rstream-send-value listener counter)
                                     (cl-incf counter)))))))
 
 (cl-defmethod rstream-producer-stop ((obj rstream-periodic-producer))

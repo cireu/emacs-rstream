@@ -103,13 +103,13 @@ and place them properly in new stream."
          (values (oref aggregator values)))
     (setf (seq-elt values idx) value)
     (when (seq-every-p #'rstream-initialized-p values)
-      (rstream-on-value aggregator (seq-into values 'list)))))
+      (rstream-send-value aggregator (seq-into values 'list)))))
 
 (defun rstream-aggregator--try-complete (obj)
   (with-slots (active-count) obj
     (cl-decf active-count)
     (when (= active-count 0)
-      (rstream-on-complete obj))))
+      (rstream-send-complete obj))))
 
 (cl-defmethod rstream-producer-start ((obj rstream--combine-result) _listener)
   (with-slots (values active-count listeners) obj

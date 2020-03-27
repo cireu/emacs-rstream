@@ -54,6 +54,22 @@
 (cl-defgeneric rstream-on-complete (listener)
   "Handle a graceful complete for LISTENER.")
 
+;; They are different heads of the same hydra :).
+(defalias 'rstream-send-value #'rstream-on-value
+  "Send VALUE to STREAM.
+
+\n(fn STREAM VALUE)")
+
+(defalias 'rstream-send-error #'rstream-on-error
+  "Send error in ERROR-TYPE with ERROR-DATA to STREAM.
+
+\n(fn STREAM ERROR-TYPE ERROR-DATA)")
+
+(defalias 'rstream-send-complete #'rstream-on-complete
+  "Send a complete signal to STREAM.
+
+\n(fn STREAM ERROR)")
+
 ;; Observable API
 
 (cl-defgeneric rstream-register-listener (observable listener)
@@ -86,7 +102,6 @@
 
 (cl-defmethod rstream-on-complete ((obj rstream-functional-listener))
   (funcall (oref obj on-complete)))
-
 
 ;;; Core
 
@@ -179,7 +194,7 @@ subscription gone.")
   (let ((state (oref obj state)))
     (cl-check-type state rstream-broadcaster-state--running)
     (dolist (lis (oref state listeners))
-      (rstream-on-value lis value))))
+      (rstream-send-value lis value))))
 
 (cl-defmethod rstream-on-error ((obj rstream-broadcaster)
                                 error-type error-data)
@@ -191,7 +206,7 @@ subscription gone.")
       (if (null listeners-backup)
           (signal error-type error-data)
         (dolist (lis listeners-backup)
-          (rstream-on-error lis error-type error-data))))))
+          (rstream-send-error lis error-type error-data))))))
 
 (cl-defmethod rstream-on-complete ((obj rstream-broadcaster))
   (let ((state (oref obj state)))
@@ -199,7 +214,7 @@ subscription gone.")
     (let ((listeners-backup (oref state listeners)))
       (oset obj state (rstream-broadcaster-state--complete))
       (dolist (lis listeners-backup)
-        (rstream-on-complete lis)))))
+        (rstream-send-complete lis)))))
 
 (defclass rstream-subscription ()
   ((listener :initarg :listener)
@@ -231,26 +246,6 @@ stopped."
   (rstream-delete-listener (oref subscription broadcaster)
                            (oref subscription listener)))
 
-;;; Debug use
-
-(defalias 'rstream-force-send-value #'rstream-on-value
-  "Force send VALUE to STREAM.
-
-Use this only when you know what you are doing.
-\n(fn STREAM VALUE)")
-
-(defalias 'rstream-force-send-error #'rstream-on-error
-  "Force send error in ERROR-TYPE with ERROR-DATA to STREAM.
-
-Use this only when you know what you are doing.
-\n(fn STREAM ERROR-TYPE ERROR-DATA)")
-
-(defalias 'rstream-force-send-complete #'rstream-on-complete
-  "Force send a complete signal to STREAM.
-
-Use this only when you know what you are doing.
-\n(fn STREAM ERROR)")
-
 ;;; Internal
 
 (defclass rstream--forwarder ()
@@ -265,13 +260,13 @@ This provides a blanket implementation for operator/aggregator like class,
 for internal usage only.")
 
 (cl-defmethod rstream-on-value ((obj rstream--forwarder) value)
-  (rstream-on-value (rstream--forwarder-output obj) value))
+  (rstream-send-value (rstream--forwarder-output obj) value))
 
 (cl-defmethod rstream-on-error ((obj rstream--forwarder) &rest error)
-  (apply #'rstream-on-error (rstream--forwarder-output obj) error))
+  (apply #'rstream-send-error (rstream--forwarder-output obj) error))
 
 (cl-defmethod rstream-on-complete ((obj rstream--forwarder))
-  (rstream-on-complete (rstream--forwarder-output obj)))
+  (rstream-send-complete (rstream--forwarder-output obj)))
 
 (provide 'rstream-core)
 

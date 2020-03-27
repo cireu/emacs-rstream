@@ -27,17 +27,17 @@
     (let ((char (aref diagram-string index)))
       (pcase char
         (?- nil)
-        (?| (rstream-on-complete listener))
-        (?# (rstream-on-error listener error-value))
+        (?| (rstream-send-complete listener))
+        (?# (rstream-send-error listener error-value))
         (c
          (let* ((s (char-to-string c))
                 (val (pcase (assq (intern s) env)
                        (`(,_ . ,val) val)
                        (`nil s))))
-           (rstream-on-value listener val)
+           (rstream-send-value listener val)
            (cl-incf index)))))
     (if (= index (1- (length diagram-string)))
-        (rstream-on-complete listener)
+        (rstream-send-complete listener)
       (cl-incf index))))
 
 (cl-defun rstream-from-marble-diagram (diagram-string &key
