@@ -173,19 +173,21 @@ subscription gone.")
       (otherwise
        (error "Broadcaster was terminated: %S" obj)))))
 
+(defun rstream-broadcaster--close-task-action (obj)
+  (oset obj state (rstream-broadcaster-state--pending)))
+
 (cl-defmethod rstream-delete-listener ((obj rstream-broadcaster) listener)
   (let ((state (oref obj state)))
     (cl-typecase state
       (rstream-broadcaster-state--running
        (let* ((rest (remq listener (oref state listeners)))
-              (close-task (lambda ()
-                            (oset obj state
-                                  (rstream-broadcaster-state--pending))))
-              (new-state (if rest
-                             (rstream-broadcaster-state--running
-                              :listeners rest)
-                           (rstream-broadcaster-state--closing
-                            :close-task (rstream--run-asap close-task)))))
+              (new-state
+                (if rest
+                    (rstream-broadcaster-state--running
+                     :listeners rest)
+                  (rstream-broadcaster-state--closing
+                   :close-task (rstream--run-asap
+                                #'rstream-broadcaster--close-task-action)))))
          (oset obj state new-state)))
       (otherwise
        (error "Not in running state: %S" obj)))))
