@@ -54,18 +54,18 @@ and place them properly in new stream."
 ;;; Merge
 
 (defun rstream-merge (&rest streams)
-  (rstream-apply-aggregator 'rstream--merge-result streams))
+  (rstream-apply-aggregator 'rstream-merge--result streams))
 
-(defclass rstream--merge-result (rstream-aggregator)
+(defclass rstream-merge--result (rstream-aggregator)
   ((active-count)))
 
-(cl-defmethod rstream-on-complete ((obj rstream--merge-result))
+(cl-defmethod rstream-on-complete ((obj rstream-merge--result))
   (with-slots (active-count) obj
     (cl-decf active-count)
     (when (= active-count 0)
       (cl-call-next-method))))
 
-(cl-defmethod rstream-producer-start ((obj rstream--merge-result) _listener)
+(cl-defmethod rstream-producer-start ((obj rstream-merge--result) _listener)
   (with-slots (active-count) obj
     (setf active-count 0)
     (seq-doseq (in (rstream-aggregator--inputs obj))
@@ -73,7 +73,7 @@ and place them properly in new stream."
       (cl-incf active-count)))
   (cl-call-next-method))
 
-(cl-defmethod rstream-producer-stop ((obj rstream--merge-result))
+(cl-defmethod rstream-producer-stop ((obj rstream-merge--result))
   (seq-doseq (in (rstream-aggregator--inputs obj))
     (rstream-delete-listener in obj))
   (cl-call-next-method))
@@ -81,9 +81,9 @@ and place them properly in new stream."
 ;; Combine
 
 (defun rstream-combine (&rest streams)
-  (rstream-apply-aggregator 'rstream--combine-result streams))
+  (rstream-apply-aggregator 'rstream-combine--result streams))
 
-(defclass rstream--combine-result (rstream-aggregator)
+(defclass rstream-combine--result (rstream-aggregator)
   ((values) (active-count) (listeners)))
 
 (defclass rstream-combine--listener (rstream-aggregator)
@@ -111,7 +111,7 @@ and place them properly in new stream."
     (when (= active-count 0)
       (rstream-send-complete obj))))
 
-(cl-defmethod rstream-producer-start ((obj rstream--combine-result) _listener)
+(cl-defmethod rstream-producer-start ((obj rstream-combine--result) _listener)
   (with-slots (values active-count listeners) obj
     (setf active-count 0)
     (let* ((inputs (rstream-aggregator--inputs obj))
@@ -128,7 +128,7 @@ and place them properly in new stream."
       (setf listeners lis)))
   (cl-call-next-method))
 
-(cl-defmethod rstream-producer-stop ((obj rstream--combine-result))
+(cl-defmethod rstream-producer-stop ((obj rstream-combine--result))
   (let ((x (seq-mapn #'list
                      (rstream-aggregator--inputs obj)
                      (oref obj listeners))))
