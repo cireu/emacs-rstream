@@ -248,7 +248,7 @@ stopped."
   (rstream-delete-listener (oref subscription broadcaster)
                            (oref subscription listener)))
 
-;;; Internal
+;;; For internal use
 
 (defclass rstream--forwarder ()
   ((output
@@ -270,6 +270,7 @@ for internal usage only.")
 (cl-defmethod rstream-on-complete ((obj rstream--forwarder))
   (rstream-send-complete (rstream--forwarder-output obj)))
 
+;;; Footer
 (provide 'rstream-core)
 
 ;; Local Variables:
