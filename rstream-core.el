@@ -154,11 +154,14 @@ A Broadcaster is lazy and ref-counted, it won't start the Producer unless first
 subscription happened, and it will automatically stop the Producer when last
 subscription gone.")
 
+(defun rstream-broadcaster--close-task-action (obj)
+  (oset obj state (rstream-broadcaster-state--pending)))
+
 (cl-defmethod rstream-register-listener ((obj rstream-broadcaster) listener)
   (let ((state (oref obj state))
         (prod (oref obj producer))
         (lis-list (list listener)))
-    (cl-typecase state
+    (cl-etypecase state
       (rstream-broadcaster-state--running
        (oset obj state (rstream-broadcaster-state--running
                         :listeners (append (oref state listeners) lis-list))))
@@ -169,28 +172,20 @@ subscription gone.")
       (rstream-broadcaster-state--closing
        (cancel-timer (oref state close-task))
        (oset obj state (rstream-broadcaster-state--running
-                        :listeners lis-list)))
-      (otherwise
-       (error "Broadcaster was terminated: %S" obj)))))
-
-(defun rstream-broadcaster--close-task-action (obj)
-  (oset obj state (rstream-broadcaster-state--pending)))
+                        :listeners lis-list))))))
 
 (cl-defmethod rstream-delete-listener ((obj rstream-broadcaster) listener)
   (let ((state (oref obj state)))
-    (cl-typecase state
-      (rstream-broadcaster-state--running
-       (let* ((rest (remq listener (oref state listeners)))
-              (new-state
-                (if rest
-                    (rstream-broadcaster-state--running
-                     :listeners rest)
-                  (rstream-broadcaster-state--closing
-                   :close-task (rstream--run-asap
-                                #'rstream-broadcaster--close-task-action)))))
-         (oset obj state new-state)))
-      (otherwise
-       (error "Not in running state: %S" obj)))))
+    (cl-check-type state rstream-broadcaster-state--running)
+    (let* ((rest (remq listener (oref state listeners)))
+           (new-state
+             (if rest
+                 (rstream-broadcaster-state--running
+                  :listeners rest)
+               (rstream-broadcaster-state--closing
+                :close-task (rstream--run-asap
+                             #'rstream-broadcaster--close-task-action)))))
+      (oset obj state new-state))))
 
 (cl-defmethod rstream-on-value ((obj rstream-broadcaster) value)
   (let ((state (oref obj state)))
