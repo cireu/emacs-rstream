@@ -217,6 +217,11 @@ subscription gone.")
   ((listener :initarg :listener)
    (broadcaster :initarg :broadcaster)))
 
+(defun rstream-subscribe-with (broadcaster listener)
+  "Subscribe a BROADCASTER with given LISTENER."
+  (rstream-register-listener broadcaster listener)
+  (rstream-subscription :listener listener :broadcaster broadcaster))
+
 (defun rstream-subscribe (broadcaster on-value on-error on-complete)
   "Subscribe a broadcaster.
 
@@ -232,8 +237,7 @@ produce value."
   (let ((listener (rstream-functional-listener :on-value on-value
                                                :on-error on-error
                                                :on-complete on-complete)))
-    (rstream-register-listener broadcaster listener)
-    (rstream-subscription :listener listener :broadcaster broadcaster)))
+    (rstream-subscribe-with broadcaster listener)))
 
 (defun rstream-unsubscribe (subscription)
   "Unsubscribe a SUBSCRIPTION.
