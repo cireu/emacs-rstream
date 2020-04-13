@@ -154,8 +154,9 @@ A Broadcaster is lazy and ref-counted, it won't start the Producer unless first
 subscription happened, and it will automatically stop the Producer when last
 subscription gone.")
 
-(defun rstream-broadcaster--close-task-action (obj)
-  (oset obj state (rstream-broadcaster-state--pending)))
+(defun rstream-broadcaster--teardown (obj new-state)
+  (rstream-producer-stop (oref obj producer))
+  (oset obj state new-state))
 
 (cl-defmethod rstream-register-listener ((obj rstream-broadcaster) listener)
   (let ((state (oref obj state))
@@ -184,7 +185,8 @@ subscription gone.")
                   :listeners rest)
                (rstream-broadcaster-state--closing
                 :close-task (rstream--run-asap
-                             #'rstream-broadcaster--close-task-action)))))
+                             #'rstream-broadcaster--teardown
+                             obj (rstream-broadcaster-state--pending))))))
       (oset obj state new-state))))
 
 (cl-defmethod rstream-on-value ((obj rstream-broadcaster) value)
@@ -198,8 +200,9 @@ subscription gone.")
   (let ((state (oref obj state)))
     (cl-check-type state rstream-broadcaster-state--running)
     (let ((listeners-backup (oref state listeners)))
-      (oset obj state (rstream-broadcaster-state--error
-                       :error-type error-type :error-data error-data))
+      (rstream-broadcaster--teardown
+       obj (rstream-broadcaster-state--error
+            :error-type error-type :error-data error-data))
       (if (null listeners-backup)
           (signal error-type error-data)
         (dolist (lis listeners-backup)
@@ -209,7 +212,7 @@ subscription gone.")
   (let ((state (oref obj state)))
     (cl-check-type state rstream-broadcaster-state--running)
     (let ((listeners-backup (oref state listeners)))
-      (oset obj state (rstream-broadcaster-state--complete))
+      (rstream-broadcaster--teardown obj (rstream-broadcaster-state--complete))
       (dolist (lis listeners-backup)
         (rstream-send-complete lis)))))
 
