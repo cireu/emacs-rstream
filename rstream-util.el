@@ -38,6 +38,21 @@
   "Return non-nil if PLACE is initialized."
   (not (eq place rstream--uninitialized)))
 
+(defclass rstream-forwarder ()
+  ((output
+    :initarg :output))
+  :documentation "\
+A listener which forwards all received message to its output.")
+
+(cl-defmethod rstream-on-value ((obj rstream-forwarder) value)
+  (rstream-send-value (oref obj output) value))
+
+(cl-defmethod rstream-on-error ((obj rstream-forwarder) &rest error)
+  (apply #'rstream-send-error (oref obj output) error))
+
+(cl-defmethod rstream-on-complete ((obj rstream-forwarder))
+  (rstream-send-complete (oref obj output)))
+
 (provide 'rstream-util)
 
 ;; Local Variables:

@@ -26,22 +26,14 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
-(require 'eieio)
-(require 'eieio-base)
+
+;;; Utils
 
 (defsubst rstream--run-asap (func &rest args)
   "Run FUNC with ARGS asynchronously, as soon as possible."
   (apply #'run-at-time nil nil func args))
 
 ;;; Interfaces
-
-;; Producer API
-
-(cl-defgeneric rstream-producer-start (producer listener)
-  "Start PRODUCER sending values to LISTENER")
-
-(cl-defgeneric rstream-producer-stop (producer)
-  "Stop a running PRODUCER.")
 
 ;; Listener API
 
@@ -78,54 +70,37 @@
 (cl-defgeneric rstream-delete-listener (observable listener)
   "Remove LISTENER from OBSERVABLE.")
 
-(defclass rstream-functional-producer ()
-  ((start :initarg :start)
-   (stop :initarg :stop)))
-
-(cl-defmethod rstream-producer-start ((obj rstream-functional-producer)
-                                      listener)
-  (funcall (oref obj start) listener))
-
-(cl-defmethod rstream-producer-stop ((obj rstream-functional-producer))
-  (funcall (oref obj stop)))
-
-(defclass rstream-functional-listener ()
-  ((on-value :initarg :on-value)
-   (on-error :initarg :on-error)
-   (on-complete :initarg :on-complete)))
-
-(cl-defmethod rstream-on-value ((obj rstream-functional-listener) value)
-  (funcall (oref obj on-value) value))
-
-(cl-defmethod rstream-on-error ((obj rstream-functional-listener) &rest error)
-  (apply (oref obj on-error) error))
-
-(cl-defmethod rstream-on-complete ((obj rstream-functional-listener))
-  (funcall (oref obj on-complete)))
-
 ;;; Core
 
-(defclass rstream-broadcaster-state--pending (eieio-singleton) ())
+(cl-defstruct (rstream-broadcaster-state--running
+               (:copier nil))
+  listeners revoke-token)
 
-(defclass rstream-broadcaster-state--running ()
-  ((listeners :initarg :listeners)))
+(cl-defstruct (rstream-broadcaster-state--closing
+               (:copier nil))
+  close-task revoke-token)
 
-(defclass rstream-broadcaster-state--complete (eieio-singleton) ())
+(cl-defstruct (rstream-broadcaster-state--error
+               (:copier nil))
+  error-type error-data)
 
-(defclass rstream-broadcaster-state--error ()
-  ((error-type :initarg :error-type)
-   (error-data :initarg :error-data)))
+(cl-defstruct (rstream-broadcaster
+               (:constructor nil)
+               (:constructor rstream-broadcaster--new (producer))
+               (:copier nil))
+  "A Broadcaster adapts a producer function and makes it
+\"observable\" from different Listener. You can subscribe a
+Broadcaster with callback and it will run your callback when
+Producer produce a new value.
 
-(defclass rstream-broadcaster-state--closing ()
-  ((close-task :initarg :close-task)))
+A Broadcaster is lazy and ref-counted, it won't start the
+Producer unless first subscription happened, and it will
+automatically stop the Producer when last subscription gone."
+  (state 'pending
+   :documentation "
+Can be one of following type.
 
-(defclass rstream-broadcaster ()
-  ((state
-    :initform (rstream-broadcaster-state--pending)
-    :documentation "\
-This slot can be one of following type.
-
-- `rstream-broadcaster-state--pending' ::
+- Symbol `pending' ::
   Broadcaster is idle for any action.
 
 - `rstream-broadcaster-state--running' ::
@@ -136,94 +111,130 @@ This slot can be one of following type.
   Broadcaster is running a async close task, task can be canceled if new
   listener come in.
 
-- `rstream-broadcaster-state--complete' ::
+- Symbol `completed' ::
   The producer was completed and cannot advance to any other state or accept
   new listeners.
 
 - `rstream-broadcaster-state--error' ::
   The producer was exited shamefully and cannot advance to any other state
   or accept new listeners.")
-   (producer
-    :initarg :producer))
-  :documentation "\
-A Broadcaster adapts a Producer and makes it \"observable\" from different
-Listener. You can subscribe a Broadcaster with callback and it will run your
-callback when Producer produce a new value.
+  producer)
 
-A Broadcaster is lazy and ref-counted, it won't start the Producer unless first
-subscription happened, and it will automatically stop the Producer when last
-subscription gone.")
+(defalias 'rstream-broadcaster-new #'rstream-broadcaster--new
+  "Create broadcaster with given PRODUCER.
+
+PRODUCER is a function call with one argument, the broadcaster will be created.
+You can use `rstream-send-value', `rstream-send-error', `rstream-send-complete'
+to send different signal to the broadcaster.
+
+PRODUCER may return a function call with zero argument to revoke the execution,
+otherwise it should return nil.
+
+\(fn PRODUCER)")
 
 (defun rstream-broadcaster--teardown (obj new-state)
-  (rstream-producer-stop (oref obj producer))
-  (oset obj state new-state))
+  (pcase-exhaustive (rstream-broadcaster-state obj)
+    ((or (cl-struct rstream-broadcaster-state--running
+                    revoke-token)
+         (cl-struct rstream-broadcaster-state--closing
+                    revoke-token))
+     (when revoke-token (funcall revoke-token))))
+  (setf (rstream-broadcaster-state obj) new-state))
 
-(cl-defmethod rstream-register-listener ((obj rstream-broadcaster) listener)
-  (let ((state (oref obj state))
-        (prod (oref obj producer))
-        (lis-list (list listener)))
-    (cl-etypecase state
-      (rstream-broadcaster-state--running
-       (oset obj state (rstream-broadcaster-state--running
-                        :listeners (append (oref state listeners) lis-list))))
-      (rstream-broadcaster-state--pending
-       (oset obj state (rstream-broadcaster-state--running
-                        :listeners lis-list))
-       (rstream-producer-start prod obj))
-      (rstream-broadcaster-state--closing
-       (cancel-timer (oref state close-task))
-       (oset obj state (rstream-broadcaster-state--running
-                        :listeners lis-list))))))
+ (cl-defmethod rstream-register-listener ((obj rstream-broadcaster) listener)
+   (pcase-let* (((cl-struct rstream-broadcaster state producer) obj)
+                (lis-list (list listener)))
+     (pcase-exhaustive state
+       ((cl-struct rstream-broadcaster-state--running
+                   listeners revoke-token)
+        (setf (rstream-broadcaster-state obj)
+              (make-rstream-broadcaster-state--running
+               :listeners (nconc listeners lis-list)
+               :revoke-token revoke-token)))
+       (`pending
+        (let ((new-state (make-rstream-broadcaster-state--running
+                          :listeners lis-list)))
+          (setf (rstream-broadcaster-state obj) new-state)
+          ;; NOTE: We must push the state to the broadcaster first, or any call
+          ;; to `rstream-send-*' will complain about non-running state.
+          (setf (rstream-broadcaster-state--running-revoke-token new-state)
+                (funcall producer obj))))
+       ((cl-struct rstream-broadcaster-state--closing
+                   close-task revoke-token)
+        (cancel-timer close-task)
+        (setf (rstream-broadcaster-state obj)
+              (make-rstream-broadcaster-state--running
+               :listeners lis-list :revoke-token revoke-token))))))
 
 (cl-defmethod rstream-delete-listener ((obj rstream-broadcaster) listener)
-  (let ((state (oref obj state)))
-    (cl-check-type state rstream-broadcaster-state--running)
-    (let* ((rest (remq listener (oref state listeners)))
-           (new-state
-             (if rest
-                 (rstream-broadcaster-state--running
-                  :listeners rest)
-               (rstream-broadcaster-state--closing
-                :close-task (rstream--run-asap
-                             #'rstream-broadcaster--teardown
-                             obj (rstream-broadcaster-state--pending))))))
-      (oset obj state new-state))))
+  (pcase-exhaustive (rstream-broadcaster-state obj)
+    ((cl-struct rstream-broadcaster-state--running
+                listeners revoke-token)
+     (cl-assert (memq listener listeners))
+     (let* ((rest (delq listener listeners))
+            (new-state
+              (if rest
+                  (make-rstream-broadcaster-state--running
+                   :listeners rest :revoke-token revoke-token)
+                (make-rstream-broadcaster-state--closing
+                 :close-task (rstream--run-asap
+                              #'rstream-broadcaster--teardown obj 'pending)
+                 :revoke-token revoke-token))))
+       (setf (rstream-broadcaster-state obj)
+             new-state)))))
 
 (cl-defmethod rstream-on-value ((obj rstream-broadcaster) value)
-  (let ((state (oref obj state)))
-    (cl-check-type state rstream-broadcaster-state--running)
-    (dolist (lis (oref state listeners))
+  (let ((state (rstream-broadcaster-state obj)))
+    (dolist (lis (rstream-broadcaster-state--running-listeners state))
       (rstream-send-value lis value))))
 
 (cl-defmethod rstream-on-error ((obj rstream-broadcaster)
                                 error-type error-data)
-  (let ((state (oref obj state)))
-    (cl-check-type state rstream-broadcaster-state--running)
-    (let ((listeners-backup (oref state listeners)))
-      (rstream-broadcaster--teardown
-       obj (rstream-broadcaster-state--error
-            :error-type error-type :error-data error-data))
-      (if (null listeners-backup)
-          (signal error-type error-data)
-        (dolist (lis listeners-backup)
-          (rstream-send-error lis error-type error-data))))))
+  (let* ((state (rstream-broadcaster-state obj))
+         (listeners-backup (rstream-broadcaster-state--running-listeners
+                            state)))
+    (rstream-broadcaster--teardown
+     obj (make-rstream-broadcaster-state--error
+          :error-type error-type :error-data error-data))
+    (if (null listeners-backup)
+        (signal error-type error-data)
+      (dolist (lis listeners-backup)
+        (rstream-send-error lis error-type error-data)))))
 
 (cl-defmethod rstream-on-complete ((obj rstream-broadcaster))
-  (let ((state (oref obj state)))
-    (cl-check-type state rstream-broadcaster-state--running)
-    (let ((listeners-backup (oref state listeners)))
-      (rstream-broadcaster--teardown obj (rstream-broadcaster-state--complete))
-      (dolist (lis listeners-backup)
-        (rstream-send-complete lis)))))
+  (let* ((state (rstream-broadcaster-state obj))
+         (listeners-backup (rstream-broadcaster-state--running-listeners
+                            state)))
+    (rstream-broadcaster--teardown obj 'completed)
+    (dolist (lis listeners-backup)
+      (rstream-send-complete lis))))
 
-(defclass rstream-subscription ()
-  ((listener :initarg :listener)
-   (broadcaster :initarg :broadcaster)))
+;;; Subscription
 
 (defun rstream-subscribe-with (broadcaster listener)
   "Subscribe a BROADCASTER with given LISTENER."
   (rstream-register-listener broadcaster listener)
-  (rstream-subscription :listener listener :broadcaster broadcaster))
+  (lambda () (rstream-delete-listener broadcaster listener)))
+
+(defun rstream-unsubscribe (subscription)
+  "Unsubscribe a SUBSCRIPTION.
+
+If SUBSCRIPTION is the last subscription of target stream, stream will
+stopped."
+  (funcall subscription))
+
+(cl-defstruct (rstream-functional-listener
+               (:copier nil))
+  on-value on-error on-complete)
+
+(cl-defmethod rstream-on-value ((obj rstream-functional-listener) value)
+  (funcall (rstream-functional-listener-on-value obj) value))
+
+(cl-defmethod rstream-on-error ((obj rstream-functional-listener) &rest error)
+  (apply (rstream-functional-listener-on-error obj) error))
+
+(cl-defmethod rstream-on-complete ((obj rstream-functional-listener))
+  (funcall (rstream-functional-listener-on-complete obj)))
 
 (defun rstream-subscribe (broadcaster on-value on-error on-complete)
   "Subscribe a broadcaster.
@@ -237,40 +248,10 @@ When BROADCASTER is completed, ON-COMPLETED will be triggered.
 
 If BROADCASTER is stopped, this function will start the BROADCASTER to
 produce value."
-  (let ((listener (rstream-functional-listener :on-value on-value
-                                               :on-error on-error
-                                               :on-complete on-complete)))
+  (let ((listener (make-rstream-functional-listener :on-value on-value
+                                                    :on-error on-error
+                                                    :on-complete on-complete)))
     (rstream-subscribe-with broadcaster listener)))
-
-(defun rstream-unsubscribe (subscription)
-  "Unsubscribe a SUBSCRIPTION.
-
-If SUBSCRIPTION is the last subscription of target stream, stream will
-stopped."
-  (rstream-delete-listener (oref subscription broadcaster)
-                           (oref subscription listener)))
-
-;;; For internal use
-
-(defclass rstream--forwarder ()
-  ((output
-    :initarg :output
-    :accessor rstream--forwarder-output))
-  :abstract t
-  :documentation "\
-A listener which forwards all received message to its output.
-
-This provides a blanket implementation for operator/aggregator like class,
-for internal usage only.")
-
-(cl-defmethod rstream-on-value ((obj rstream--forwarder) value)
-  (rstream-send-value (rstream--forwarder-output obj) value))
-
-(cl-defmethod rstream-on-error ((obj rstream--forwarder) &rest error)
-  (apply #'rstream-send-error (rstream--forwarder-output obj) error))
-
-(cl-defmethod rstream-on-complete ((obj rstream--forwarder))
-  (rstream-send-complete (rstream--forwarder-output obj)))
 
 ;;; Footer
 (provide 'rstream-core)
