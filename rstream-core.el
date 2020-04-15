@@ -236,7 +236,10 @@ stopped."
 (cl-defmethod rstream-on-complete ((obj rstream-functional-listener))
   (funcall (rstream-functional-listener-on-complete obj)))
 
-(defun rstream-subscribe (broadcaster on-value on-error on-complete)
+(cl-defun rstream-subscribe (broadcaster on-value
+                             &optional
+                               (on-error #'signal)
+                               (on-complete #'ignore))
   "Subscribe a broadcaster.
 
 Each value arrived in BROADCASTER will call ON-VALUE with that value.
